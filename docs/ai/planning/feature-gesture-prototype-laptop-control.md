@@ -21,7 +21,7 @@ milestone: 1
 
 ### Phase 1: Feature Engineering (Ngày 1 sáng)
 
-- [ ] **T1.1** — Viết `utils/feature_extractor.py`
+- [x] **T1.1** — Viết `utils/feature_extractor.py`
   - Function: normalize 21 KP relative to wrist, scale to [-1,1] (x, y, z included)
   - Function: compute 15 joint angles (5 fingers × 3 joints)
   - Function: compute 10 distances (5 tip→wrist, 5 tip→palm_center) in 3D
@@ -29,16 +29,16 @@ milestone: 1
   - Unit test: verify output shape = (93,), no NaN
   - _Effort: 2h_
 
-- [ ] **T1.2** — Cập nhật `app.py` để dùng `FeatureExtractor` thay `pre_process_landmark()`
+- [x] **T1.2** — Cập nhật `app.py` để dùng `FeatureExtractor` thay `pre_process_landmark()`
   - Giữ backward compat: `pre_process_landmark()` vẫn còn nhưng không dùng trong main path
   - _Effort: 30min_
 
-- [ ] **T1.3** — Verify pipeline vẫn chạy với feature mới (dry-run, chưa cần classifier mới)
+- [x] **T1.3** — Verify pipeline vẫn chạy với feature mới (dry-run, chưa cần classifier mới)
   - _Effort: 30min_
 
 ### Phase 2: Data Collection (Ngày 1 chiều)
 
-- [ ] **T2.1** — Thiết kế và confirm gesture vocabulary (13 classes + Null)
+- [x] **T2.1** — Thiết kế và confirm gesture vocabulary (13 classes + Null)
   - Kiểm tra từng gesture: có phân biệt đủ rõ ràng không? (không bị confuse với nhau)
   - Ghi chú vào `config/gesture_vocabulary.md`
   - _Effort: 1h_
@@ -70,19 +70,19 @@ milestone: 1
   - Verify output shape trả về confidence scores (không chỉ argmax)
   - _Effort: 30min_
 
-- [ ] **T3.4** — Viết `model/keypoint_classifier/keypoint_classifier_v2.py`
+- [x] **T3.4** — Viết `model/keypoint_classifier/keypoint_classifier_v2.py`
   - Return `(class_index, softmax_scores)` thay vì chỉ `class_index`
   - _Effort: 30min_
 
 ### Phase 4: GestureStateMachine (Ngày 2 chiều)
 
-- [ ] **T4.1** — Viết `utils/gesture_state_machine.py`
+- [x] **T4.1** — Viết `utils/gesture_state_machine.py`
   - States: `idle`, `tracking`, `active`
   - Params: `CONFIDENCE_THRESHOLD=0.82`, `ACTIVATION_FRAMES=5`, `DEACTIVATION_FRAMES=10`, `DEBOUNCE_SECONDS=0.5`
   - Returns `GestureEvent(name, event_type)` hoặc `None`
   - _Effort: 2h_
 
-- [ ] **T4.2** — Unit test state machine
+- [x] **T4.2** — Unit test state machine
   - Test: idle → null input → stays idle
   - Test: 5 frames same class > threshold → emits start event
   - Test: debounce — no re-emit within 0.5s
@@ -91,22 +91,21 @@ milestone: 1
 
 ### Phase 5: Action Mapping (Ngày 3 sáng)
 
-- [ ] **T5.1** — Tạo `config/gesture_actions.yaml`
+- [x] **T5.1** — Tạo `config/gesture_actions.yaml`
   - Map 12 gesture class names → pynput actions
   - Schema: `gesture_name: {on_start: key_press|mouse_click, key|button: value}`
   - _Effort: 30min_
 
-- [ ] **T5.2** — Viết `utils/action_mapper.py`
+- [x] **T5.2** — Viết `utils/action_mapper.py`
   - Đọc config YAML
   - `handle(event)` → gọi pynput
   - _Effort: 1h_
 
-- [ ] **T5.3** — Thêm dependencies vào `requirements.txt`
+- [x] **T5.3** — Thêm dependencies vào `requirements.txt`
   - `pynput` — primary OS input
   - `ydotool` — Wayland fallback (system package: `sudo apt install ydotool`)
   - Kiểm tra pynput: `python -c "from pynput.keyboard import Controller; Controller().press('a')"` trên session hiện tại
-  - Nếu fail → switch ActionMapper sang ydotool subprocess mode
-  - _Effort: 45min_
+  - **Kết quả**: XWayland (`DISPLAY=:0`) available → pynput hoạt động. ydotool không cần thiết trên môi trường này.
 
 ### Phase 6: Integration & UI (Ngày 3 chiều)
 

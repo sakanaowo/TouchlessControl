@@ -1,0 +1,67 @@
+# Gesture → OS action mapping — Milestone 1
+# on_start: action triggered when gesture is ACTIVATED (event_type == 'start')
+# repeat: true  → also fires on 'hold' event (every debounce_seconds while gesture is held)
+# repeat: false → one-shot only ('hold' events ignored)
+#
+# on_start types:
+#   key_press  → single key via pynput / ydotool
+#   key_combo  → multi-key chord (e.g. Alt+Tab)
+#   mouse_click → left / right / middle
+#   scroll     → up / down with configurable amount
+
+open_palm:
+  on_start: key_press
+  key: "XF86AudioPlay"
+  repeat: false
+
+fist:
+  on_start: key_press
+  key: "XF86AudioMute"
+  repeat: false
+
+thumbs_up:
+  on_start: key_press
+  key: "XF86AudioRaiseVolume"
+  repeat: true
+
+thumbs_down:
+  on_start: key_press
+  key: "XF86AudioLowerVolume"
+  repeat: true
+
+v_sign:
+  on_start: scroll
+  direction: up
+  amount: 5
+  repeat: true
+
+three_fingers:
+  on_start: scroll
+  direction: down
+  amount: 5
+  repeat: true
+
+four_fingers:
+  on_start: key_press
+  key: "XF86MonBrightnessUp"
+  repeat: true
+
+pinch:
+  on_start: mouse_click
+  button: left
+  repeat: false
+
+ok_sign:
+  on_start: mouse_click
+  button: right
+  repeat: false
+
+gun_sign:
+  on_start: key_combo
+  keys: ["alt", "tab"]
+  repeat: false
+
+call_sign:
+  on_start: key_press
+  key: "XF86AudioPrev"
+  repeat: false
