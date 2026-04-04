@@ -196,16 +196,16 @@ Mapping table stored in `config/gesture_actions.yaml`:
 thumbs_up:
   on_start: key_press
   key: "XF86AudioRaiseVolume"
-  repeat: true          # volume increases while held
+  repeat: true # volume increases while held
 fist:
   on_start: key_press
   key: "XF86AudioMute"
-  repeat: false         # mute toggle: one-shot only
+  repeat: false # mute toggle: one-shot only
 v_sign:
   on_start: scroll
   direction: up
   amount: 5
-  repeat: true          # continuous scroll while held
+  repeat: true # continuous scroll while held
 gun_sign:
   on_start: key_combo
   keys: ["alt", "tab"]
@@ -228,21 +228,21 @@ pinch:
 
 ## Design Decisions
 
-| Decision                        | Choice                               | Rationale                                                                                          |
-| ------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| Feature size                    | 93 (not 42)                          | Add z-depth + angles + distances; z helps distinguish v_sign vs pointer despite pseudo-depth noise |
-| z-depth included                | Yes (noisy)                          | Middle-finger z-difference is key discriminator for v_sign vs pointer; noise accepted              |
-| Confidence threshold            | 0.82                                 | Balance FA/FR — tunable via config                                                                 |
-| Null class strategy             | Explicit class (not threshold-based) | More robust than "below threshold = null"                                                          |
-| Action config                   | YAML external file                   | Allows remapping gestures without retraining                                                       |
-| State machine vs. simple voting | State machine                        | More explicit start/end events, enables hold-action pattern                                        |
-| pynput on Wayland               | pynput primary, ydotool fallback     | pynput may fail on Wayland compositor; ydotool is Wayland-native alternative                       |
-| TFLite v2                       | Keep TFLite                          | Consistent with existing pipeline, fast on CPU                                                     |
-| pointer gesture path            | Separate (no ActionMapper)           | Cursor control is continuous, not event-based; minimal change strategy                             |
-| Joint angle base point          | Wrist (kp[0]) as base for all fingers | Enables computing MCP angle; 5-element FINGER_JOINTS → `range(3)` = 3 angles/finger = 15 total    |
-| No-hand API                     | Separate `update_no_hand()` method   | Cleaner separation of concerns vs. `no_hand=True` flag; caller logic simpler                       |
-| Hold / repeat behavior          | Per-gesture `repeat: true\|false` in YAML | Volume/scroll benefit from continuous fire; mute/click must be one-shot                       |
-| Wayland detection               | Upfront `os.environ.get('WAYLAND_DISPLAY')` | Deterministic; avoids runtime exception ambiguity; XWayland users can unset env var         |
+| Decision                        | Choice                                      | Rationale                                                                                          |
+| ------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Feature size                    | 93 (not 42)                                 | Add z-depth + angles + distances; z helps distinguish v_sign vs pointer despite pseudo-depth noise |
+| z-depth included                | Yes (noisy)                                 | Middle-finger z-difference is key discriminator for v_sign vs pointer; noise accepted              |
+| Confidence threshold            | 0.82                                        | Balance FA/FR — tunable via config                                                                 |
+| Null class strategy             | Explicit class (not threshold-based)        | More robust than "below threshold = null"                                                          |
+| Action config                   | YAML external file                          | Allows remapping gestures without retraining                                                       |
+| State machine vs. simple voting | State machine                               | More explicit start/end events, enables hold-action pattern                                        |
+| pynput on Wayland               | pynput primary, ydotool fallback            | pynput may fail on Wayland compositor; ydotool is Wayland-native alternative                       |
+| TFLite v2                       | Keep TFLite                                 | Consistent with existing pipeline, fast on CPU                                                     |
+| pointer gesture path            | Separate (no ActionMapper)                  | Cursor control is continuous, not event-based; minimal change strategy                             |
+| Joint angle base point          | Wrist (kp[0]) as base for all fingers       | Enables computing MCP angle; 5-element FINGER_JOINTS → `range(3)` = 3 angles/finger = 15 total     |
+| No-hand API                     | Separate `update_no_hand()` method          | Cleaner separation of concerns vs. `no_hand=True` flag; caller logic simpler                       |
+| Hold / repeat behavior          | Per-gesture `repeat: true\|false` in YAML   | Volume/scroll benefit from continuous fire; mute/click must be one-shot                            |
+| Wayland detection               | Upfront `os.environ.get('WAYLAND_DISPLAY')` | Deterministic; avoids runtime exception ambiguity; XWayland users can unset env var                |
 
 ---
 
