@@ -27,6 +27,7 @@ class ActionMapper:
             self._config: dict = yaml.safe_load(f)
 
         self._backend = self._detect_backend()
+        self._dragging: bool = False
 
         if self._backend == "pynput":
             from pynput.keyboard import Controller as KbCtrl, Key as PynKey
@@ -57,19 +58,30 @@ class ActionMapper:
         """
         Dispatch an OS action for the given GestureEvent.
         'start' always fires. 'hold' fires only when repeat: true in config.
-        'end' events are ignored in M1.
+        'end' fires for mouse_drag gestures to release the button.
         """
-        if event.event_type == "end":
-            return
-
         action = self._config.get(event.gesture)
         if action is None:
+            return
+
+        on_start = action.get("on_start")
+
+        # mouse_drag: press on start, release on end
+        if on_start == "mouse_drag":
+            if event.event_type == "start":
+                self._mouse_press(action["button"])
+                self._dragging = True
+            elif event.event_type == "end" and self._dragging:
+                self._mouse_release(action["button"])
+                self._dragging = False
+            return
+
+        if event.event_type == "end":
             return
 
         if event.event_type == "hold" and not action.get("repeat", False):
             return
 
-        on_start = action.get("on_start")
         if on_start == "key_press":
             self._key_press(action["key"])
         elif on_start == "key_combo":
@@ -115,6 +127,44 @@ class ActionMapper:
             btn_map = {"left": "0x40001", "right": "0x40002", "middle": "0x40003"}
             code = btn_map.get(button_name, "0x40001")
             subprocess.run(["ydotool", "click", code], check=False)
+
+    def _mouse_press(self, button_name: str) -> None:
+        if self._backend == "pynput":
+            try:
+                button = getattr(self._btn_cls, button_name)
+                self._ms.press(button)
+            except Exception:
+                pass
+        elif self._backend == "ydotool":
+            btn_map = {"left": "0x40001", "right": "0x40002", "middle": "0x40003"}
+            subprocess.run(
+                [
+                    "ydotool",
+                    "click",
+                    "--clearmodifiers",
+                    btn_map.get(button_name, "0x40001"),
+                ],
+                check=False,
+            )
+
+    def _mouse_release(self, button_name: str) -> None:
+        if self._backend == "pynput":
+            try:
+                button = getattr(self._btn_cls, button_name)
+                self._ms.release(button)
+            except Exception:
+                pass
+        elif self._backend == "ydotool":
+            btn_map = {"left": "0x40002", "right": "0x40008", "middle": "0x40020"}
+            subprocess.run(
+                [
+                    "ydotool",
+                    "click",
+                    "--clearmodifiers",
+                    btn_map.get(button_name, "0x40002"),
+                ],
+                check=False,
+            )
 
     def _scroll(self, direction: str, amount: int) -> None:
         if self._backend == "pynput":

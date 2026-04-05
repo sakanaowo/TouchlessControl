@@ -47,7 +47,7 @@ four_fingers:
   repeat: true
 
 pinch:
-  on_start: mouse_click
+  on_start: mouse_drag
   button: left
   repeat: false
 

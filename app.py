@@ -4,8 +4,12 @@ import csv
 import copy
 import argparse
 import itertools
+import os
 from collections import Counter
 from collections import deque
+
+# Force X11/xcb backend so Qt keyboard events work under Wayland
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 import cv2 as cv
 import numpy as np
@@ -21,8 +25,8 @@ def get_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--width", help="cap width", type=int, default=960)
-    parser.add_argument("--height", help="cap height", type=int, default=540)
+    parser.add_argument("--width", help="cap width", type=int, default=640)
+    parser.add_argument("--height", help="cap height", type=int, default=480)
 
     parser.add_argument("--use_static_image_mode", action="store_true")
     parser.add_argument(
@@ -103,6 +107,10 @@ def main():
 
     #  ########################################################################
     mode = 0
+    current_class = -1  # class being recorded right now (-1 = paused)
+    last_logged_number = -1
+    session_log_count = 0
+    class_counts = {}  # per-class sample count this session
 
     while True:
         fps = cvFpsCalc.get()
@@ -111,7 +119,17 @@ def main():
         key = cv.waitKey(10)
         if key == 27:  # ESC
             break
+        prev_mode = mode
         number, mode = select_mode(key, mode)
+        # Leaving collection mode → clear active class
+        if mode != prev_mode:
+            current_class = -1
+        if mode == 1:
+            if 0 <= number <= 12:
+                # Always switch to the pressed class — no toggle ambiguity
+                current_class = number
+            elif key == 32:  # Space → pause/stop recording
+                current_class = -1
 
         # カメラキャプチャ #####################################################
         ret, image = cap.read()
@@ -146,12 +164,15 @@ def main():
                     debug_image, point_history
                 )
                 # 学習データ保存
-                logging_csv(
-                    number,
+                if logging_csv(
+                    current_class,
                     mode,
                     pre_processed_landmark_list,
                     pre_processed_point_history_list,
-                )
+                ):
+                    last_logged_number = current_class
+                    session_log_count += 1
+                    class_counts[current_class] = class_counts.get(current_class, 0) + 1
 
                 # ハンドサイン分類
                 hand_sign_id = keypoint_classifier(legacy_landmark_list)
@@ -174,7 +195,9 @@ def main():
 
                 # 描画
                 debug_image = draw_bounding_rect(use_brect, debug_image, brect)
-                debug_image = draw_landmarks(debug_image, landmark_list)
+                debug_image = draw_landmarks(
+                    debug_image, [p[:2] for p in landmark_list]
+                )
                 debug_image = draw_info_text(
                     debug_image,
                     brect,
@@ -186,7 +209,15 @@ def main():
             point_history.append([0, 0])
 
         debug_image = draw_point_history(debug_image, point_history)
-        debug_image = draw_info(debug_image, fps, mode, number)
+        debug_image = draw_info(
+            debug_image,
+            fps,
+            mode,
+            current_class,
+            last_logged_number,
+            session_log_count,
+            class_counts,
+        )
 
         # 画面反映 #############################################################
         cv.imshow("Hand Gesture Recognition", debug_image)
@@ -299,19 +330,19 @@ def pre_process_point_history(image, point_history):
 
 
 def logging_csv(number, mode, landmark_list, point_history_list):
-    if mode == 0:
-        pass
     if mode == 1 and (0 <= number <= 12):
         csv_path = "model/keypoint_classifier/keypoint.csv"
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([number, *landmark_list])
+        return True
     if mode == 2 and (0 <= number <= 9):
         csv_path = "model/point_history_classifier/point_history.csv"
         with open(csv_path, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([number, *point_history_list])
-    return
+        return True
+    return False
 
 
 def draw_landmarks(image, landmark_point):
@@ -650,7 +681,15 @@ def draw_point_history(image, point_history):
     return image
 
 
-def draw_info(image, fps, mode, number):
+def draw_info(
+    image,
+    fps,
+    mode,
+    current_class=-1,
+    last_logged_number=-1,
+    session_log_count=0,
+    class_counts=None,
+):
     cv.putText(
         image,
         "FPS:" + str(fps),
@@ -684,17 +723,43 @@ def draw_info(image, fps, mode, number):
             1,
             cv.LINE_AA,
         )
-        if 0 <= number <= 12:
+        if 0 <= current_class <= 12:
+            # Recording — green
+            this_class_count = (class_counts or {}).get(current_class, 0)
             cv.putText(
                 image,
-                "NUM:" + str(number),
+                f"[REC] CLASS:{current_class}  this:{this_class_count}  total:{session_log_count}",
                 (10, 110),
                 cv.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                (255, 255, 255),
+                (0, 220, 0),
+                2,
+                cv.LINE_AA,
+            )
+        else:
+            # Paused — show last class and hint
+            hint = "Press 0-9/a/b/c=record  Space=stop  n=exit"
+            cv.putText(
+                image,
+                hint,
+                (10, 110),
+                cv.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (200, 200, 200),
                 1,
                 cv.LINE_AA,
             )
+            if 0 <= last_logged_number <= 12:
+                cv.putText(
+                    image,
+                    f"Last saved: class {last_logged_number}  total:{session_log_count}",
+                    (10, 128),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.48,
+                    (160, 160, 160),
+                    1,
+                    cv.LINE_AA,
+                )
     return image
 
 
