@@ -17,7 +17,7 @@ import mediapipe as mp
 
 from utils import CvFpsCalc
 from utils.feature_extractor import FeatureExtractor
-from model import KeyPointClassifier
+from model import KeyPointClassifierV2
 from model import PointHistoryClassifier
 
 
@@ -75,14 +75,15 @@ def main():
         min_tracking_confidence=min_tracking_confidence,
     )
 
-    keypoint_classifier = KeyPointClassifier()
+    keypoint_classifier = KeyPointClassifierV2()
     feature_extractor = FeatureExtractor()
 
     point_history_classifier = PointHistoryClassifier()
 
     # ラベル読み込み ###########################################################
     with open(
-        "model/keypoint_classifier/keypoint_classifier_label.csv", encoding="utf-8-sig"
+        "model/keypoint_classifier/keypoint_classifier_v2_label.csv",
+        encoding="utf-8-sig",
     ) as f:
         keypoint_classifier_labels = csv.reader(f)
         keypoint_classifier_labels = [row[0] for row in keypoint_classifier_labels]
@@ -157,9 +158,6 @@ def main():
 
                 # 相対座標・正規化座標への変換
                 pre_processed_landmark_list = feature_extractor.extract(landmark_list)
-                legacy_landmark_list = feature_extractor.extract_legacy_xy(
-                    landmark_list
-                )
                 pre_processed_point_history_list = pre_process_point_history(
                     debug_image, point_history
                 )
@@ -175,7 +173,7 @@ def main():
                     class_counts[current_class] = class_counts.get(current_class, 0) + 1
 
                 # ハンドサイン分類
-                hand_sign_id = keypoint_classifier(legacy_landmark_list)
+                hand_sign_id, _ = keypoint_classifier(pre_processed_landmark_list)
                 if hand_sign_id == 2:  # 指差しサイン
                     point_history.append(landmark_list[8][0:2])  # 人差指座標
                 else:
