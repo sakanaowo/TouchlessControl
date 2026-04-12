@@ -276,10 +276,12 @@ class TestOverlayState:
         mgr._last_flush_count = 5
         mgr._last_flush_target = 5
         mgr._last_flush_timed_out = False
+        mgr._last_flush_class_id = 2
         info = mgr.get_overlay_state()
         assert info["state"] == "done"
         assert info["flushed_count"] == 5
         assert info["timed_out"] is False
+        assert info["class_id"] == 2
 
 
 class TestBatchSize:

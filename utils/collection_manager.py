@@ -34,7 +34,7 @@ class CollectionManager:
     """
 
     COUNTDOWN_SECONDS = 3
-    DONE_DISPLAY_SECONDS = 1.5
+    DONE_DISPLAY_SECONDS = 1.0
 
     def __init__(
         self,
@@ -59,6 +59,7 @@ class CollectionManager:
         self._last_flush_count: int = 0
         self._last_flush_target: int = 0
         self._last_flush_timed_out: bool = False
+        self._last_flush_class_id: int = -1
 
         self._load_existing_counts()
 
@@ -78,7 +79,7 @@ class CollectionManager:
         self.state = "countdown"
 
     def on_frame(self, hands: list[HandData]) -> int:
-        """Process one video frame. Returns number of frames accepted (0 or 1).
+        """Process one video frame.  Returns 0 or 1 (frame accepted?).
 
         Multi-hand: if frame passes skip + quality, each qualifying hand
         adds a row to the buffer, but ``collected`` increments by 1 (frame-based).
@@ -153,6 +154,7 @@ class CollectionManager:
             base["flushed_count"] = self._last_flush_count
             base["flushed_target"] = self._last_flush_target
             base["timed_out"] = self._last_flush_timed_out
+            base["class_id"] = self._last_flush_class_id
         return base
 
     def adjust_batch_size(self, delta: int) -> None:
@@ -167,6 +169,7 @@ class CollectionManager:
         self._last_flush_count = self.session.collected
         self._last_flush_target = self.session.target_count
         self._last_flush_timed_out = timed_out
+        self._last_flush_class_id = self.session.class_id
         # Update class counts
         self.class_counts[self.session.class_id] = self.class_counts.get(
             self.session.class_id, 0

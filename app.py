@@ -159,9 +159,11 @@ def main():
             if collection_mgr.state in ("countdown", "recording"):
                 collection_mgr.cancel()
         elif key == ord("+") or key == ord("="):
-            collection_mgr.adjust_batch_size(10)
+            if class_menu.visible:
+                collection_mgr.adjust_batch_size(10)
         elif key == ord("-"):
-            collection_mgr.adjust_batch_size(-10)
+            if class_menu.visible:
+                collection_mgr.adjust_batch_size(-10)
         # Legacy point-history logging
         elif key == 104:  # h
             point_history_mode = not point_history_mode
@@ -410,14 +412,20 @@ def draw_balance_chart(image, class_counts, labels):
         bar_w = int(bar_max_w * count / max(max_count, 1))
         color = (0, 180, 0) if count >= 100 else (0, 140, 255)
         cv.rectangle(image, (bar_x, y - 10), (bar_x + bar_w, y - 2), color, -1)
-        # Count text
+        # Count text + NEEDS MORE indicator
+        count_label = str(count)
+        if count < 100:
+            count_label += " NEEDS MORE"
+            count_color = (0, 140, 255)
+        else:
+            count_color = (160, 160, 160)
         cv.putText(
             image,
-            str(count),
+            count_label,
             (bar_x + bar_max_w + 5, y),
             cv.FONT_HERSHEY_SIMPLEX,
             0.35,
-            (160, 160, 160),
+            count_color,
             1,
         )
     return image
@@ -471,6 +479,19 @@ def draw_collection_overlay(image, mgr, labels):
             2,
             cv.LINE_AA,
         )
+        # Pose instruction
+        hint = "Giu tay dung pose!"
+        hint_size = cv.getTextSize(hint, cv.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
+        cv.putText(
+            image,
+            hint,
+            ((w - hint_size[0]) // 2, ty + 70),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 200, 255),
+            1,
+            cv.LINE_AA,
+        )
 
     elif state == "recording":
         class_id = info["class_id"]
@@ -484,7 +505,7 @@ def draw_collection_overlay(image, mgr, labels):
         overlay = image.copy()
         cv.rectangle(overlay, (0, 0), (w, banner_h), (0, 0, 0), -1)
         cv.addWeighted(overlay, 0.7, image, 0.3, 0, image)
-        rec_text = f"[REC] {label}  {collected}/{target}"
+        rec_text = f"[REC \u25cf] {label}  {collected}/{target}"
         cv.putText(
             image,
             rec_text,
@@ -513,11 +534,13 @@ def draw_collection_overlay(image, mgr, labels):
         flushed = info.get("flushed_count", 0)
         target = info.get("flushed_target", 0)
         timed_out = info.get("timed_out", False)
+        done_class_id = info.get("class_id", -1)
+        done_label = labels[done_class_id] if 0 <= done_class_id < len(labels) else ""
         if timed_out:
-            msg = f"Timeout: {flushed}/{target} frames saved"
+            msg = f"\u26a0 Timeout: {flushed}/{target} frames saved for {done_label}"
             color = (0, 180, 255)
         else:
-            msg = f"{flushed} frames saved"
+            msg = f"\u2713 {flushed} frames saved for {done_label}"
             color = (0, 220, 0)
         text_size = cv.getTextSize(msg, cv.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
         tx = (w - text_size[0]) // 2
