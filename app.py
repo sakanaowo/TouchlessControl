@@ -16,6 +16,8 @@ import numpy as np
 import mediapipe as mp
 
 from utils import CvFpsCalc
+from utils.class_menu import ClassMenu
+from utils.collection_manager import CollectionManager, HandData
 from utils.feature_extractor import FeatureExtractor
 from model import KeyPointClassifierV2
 from model import PointHistoryClassifier
@@ -25,8 +27,8 @@ def get_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--width", help="cap width", type=int, default=640)
-    parser.add_argument("--height", help="cap height", type=int, default=480)
+    parser.add_argument("--width", help="cap width", type=int, default=1280)
+    parser.add_argument("--height", help="cap height", type=int, default=720)
 
     parser.add_argument("--use_static_image_mode", action="store_true")
     parser.add_argument(
@@ -63,14 +65,20 @@ def main():
 
     # カメラ準備 ###############################################################
     cap = cv.VideoCapture(cap_device)
+    cap.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+    # Verify actual resolution
+    actual_w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+    if actual_w != cap_width or actual_h != cap_height:
+        print(f"[WARN] Requested {cap_width}x{cap_height}, got {actual_w}x{actual_h}")
 
     # モデルロード #############################################################
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
         static_image_mode=use_static_image_mode,
-        max_num_hands=1,
+        max_num_hands=2,
         min_detection_confidence=min_detection_confidence,
         min_tracking_confidence=min_tracking_confidence,
     )
@@ -107,30 +115,58 @@ def main():
     finger_gesture_history = deque(maxlen=history_length)
 
     #  ########################################################################
-    mode = 0
-    current_class = -1  # class being recorded right now (-1 = paused)
-    last_logged_number = -1
-    session_log_count = 0
-    class_counts = {}  # per-class sample count this session
+    # Collection UI components
+    label_csv_path = "model/keypoint_classifier/keypoint_classifier_v2_label.csv"
+    class_menu = ClassMenu(label_csv_path)
+    collection_mgr = CollectionManager(
+        csv_path="model/keypoint_classifier/keypoint.csv",
+    )
+    class_menu.set_class_counts(collection_mgr.class_counts)
+
+    # Point history logging (legacy mode, activated by 'h')
+    point_history_mode = False
+    point_history_class = -1
 
     while True:
         fps = cvFpsCalc.get()
 
         # キー処理(ESC：終了) #################################################
-        key = cv.waitKey(10)
+        key = cv.waitKeyEx(10)
+
+        # Collection manager tick (auto-transitions: done → idle)
+        collection_mgr.tick()
+        class_menu.set_class_counts(collection_mgr.class_counts)
+
         if key == 27:  # ESC
-            break
-        prev_mode = mode
-        number, mode = select_mode(key, mode)
-        # Leaving collection mode → clear active class
-        if mode != prev_mode:
-            current_class = -1
-        if mode == 1:
-            if 0 <= number <= 12:
-                # Always switch to the pressed class — no toggle ambiguity
-                current_class = number
-            elif key == 32:  # Space → pause/stop recording
-                current_class = -1
+            if collection_mgr.state in ("countdown", "recording"):
+                collection_mgr.cancel()
+            elif class_menu.visible:
+                class_menu.toggle()  # close menu
+            else:
+                break  # quit app
+        elif key == 9:  # Tab
+            if collection_mgr.state == "idle":
+                class_menu.toggle()
+        elif key == 65362:  # Up arrow
+            class_menu.move_up()
+        elif key == 65364:  # Down arrow
+            class_menu.move_down()
+        elif key == 13:  # Enter
+            class_id = class_menu.confirm()
+            if class_id is not None:
+                collection_mgr.start_session(class_id)
+        elif key == 32:  # Space
+            if collection_mgr.state in ("countdown", "recording"):
+                collection_mgr.cancel()
+        elif key == ord("+") or key == ord("="):
+            collection_mgr.adjust_batch_size(10)
+        elif key == ord("-"):
+            collection_mgr.adjust_batch_size(-10)
+        # Legacy point-history logging
+        elif key == 104:  # h
+            point_history_mode = not point_history_mode
+        elif point_history_mode and 48 <= key <= 57:
+            point_history_class = key - 48
 
         # カメラキャプチャ #####################################################
         ret, image = cap.read()
@@ -147,6 +183,7 @@ def main():
         image.flags.writeable = True
 
         #  ####################################################################
+        hands_data = []  # for CollectionManager
         if results.multi_hand_landmarks is not None:
             for hand_landmarks, handedness in zip(
                 results.multi_hand_landmarks, results.multi_handedness
@@ -161,16 +198,20 @@ def main():
                 pre_processed_point_history_list = pre_process_point_history(
                     debug_image, point_history
                 )
-                # 学習データ保存
-                if logging_csv(
-                    current_class,
-                    mode,
-                    pre_processed_landmark_list,
-                    pre_processed_point_history_list,
-                ):
-                    last_logged_number = current_class
-                    session_log_count += 1
-                    class_counts[current_class] = class_counts.get(current_class, 0) + 1
+
+                # Collect hand data for guided collection
+                confidence = handedness.classification[0].score
+                hands_data.append(
+                    HandData(
+                        features=pre_processed_landmark_list, confidence=confidence
+                    )
+                )
+
+                # Legacy point-history logging
+                if point_history_mode and 0 <= point_history_class <= 9:
+                    logging_csv_point_history(
+                        point_history_class, pre_processed_point_history_list
+                    )
 
                 # ハンドサイン分類
                 hand_sign_id, _ = keypoint_classifier(pre_processed_landmark_list)
@@ -206,16 +247,23 @@ def main():
         else:
             point_history.append([0, 0])
 
+        # Feed hands to collection manager
+        if collection_mgr.state in ("countdown", "recording"):
+            collection_mgr.on_frame(hands_data)
+
         debug_image = draw_point_history(debug_image, point_history)
-        debug_image = draw_info(
+        debug_image = draw_collection_overlay(
             debug_image,
-            fps,
-            mode,
-            current_class,
-            last_logged_number,
-            session_log_count,
-            class_counts,
+            collection_mgr,
+            keypoint_classifier_labels,
         )
+        debug_image = draw_balance_chart(
+            debug_image,
+            collection_mgr.class_counts,
+            keypoint_classifier_labels,
+        )
+        debug_image = draw_info(debug_image, fps, collection_mgr)
+        debug_image = class_menu.draw(debug_image)
 
         # 画面反映 #############################################################
         cv.imshow("Hand Gesture Recognition", debug_image)
@@ -224,23 +272,13 @@ def main():
     cv.destroyAllWindows()
 
 
-def select_mode(key, mode):
-    number = -1
-    if 48 <= key <= 57:  # 0 ~ 9
-        number = key - 48
-    if key == 97:  # a → class 10 (ok_sign)
-        number = 10
-    if key == 98:  # b → class 11 (gun_sign)
-        number = 11
-    if key == 99:  # c → class 12 (call_sign)
-        number = 12
-    if key == 110:  # n
-        mode = 0
-    if key == 107:  # k
-        mode = 1
-    if key == 104:  # h
-        mode = 2
-    return number, mode
+def logging_csv_point_history(number, point_history_list):
+    """Legacy: append point-history row to CSV."""
+    if 0 <= number <= 9:
+        csv_path = "model/point_history_classifier/point_history.csv"
+        with open(csv_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([number, *point_history_list])
 
 
 def calc_bounding_rect(image, landmarks):
@@ -327,20 +365,168 @@ def pre_process_point_history(image, point_history):
     return temp_point_history
 
 
-def logging_csv(number, mode, landmark_list, point_history_list):
-    if mode == 1 and (0 <= number <= 12):
-        csv_path = "model/keypoint_classifier/keypoint.csv"
-        with open(csv_path, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([number, *landmark_list])
-        return True
-    if mode == 2 and (0 <= number <= 9):
-        csv_path = "model/point_history_classifier/point_history.csv"
-        with open(csv_path, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([number, *point_history_list])
-        return True
-    return False
+def draw_balance_chart(image, class_counts, labels):
+    """Draw mini horizontal bar chart of per-class sample counts at top-right."""
+    if not class_counts:
+        return image
+    h, w = image.shape[:2]
+    max_count = max(class_counts.values()) if class_counts else 1
+    bar_max_w = 120
+    line_h = 18
+    pad = 8
+    num_classes = len(labels)
+    chart_h = line_h * num_classes + pad * 2
+    chart_w = bar_max_w + 140
+    chart_x = w - chart_w - 10
+    chart_y = 10
+
+    # Semi-transparent background
+    overlay = image.copy()
+    cv.rectangle(
+        overlay,
+        (chart_x, chart_y),
+        (chart_x + chart_w, chart_y + chart_h),
+        (20, 20, 20),
+        -1,
+    )
+    cv.addWeighted(overlay, 0.75, image, 0.25, 0, image)
+
+    for i, label in enumerate(labels):
+        count = class_counts.get(i, 0)
+        y = chart_y + pad + i * line_h + 14
+        # Label (truncated)
+        short = label[:8]
+        cv.putText(
+            image,
+            short,
+            (chart_x + pad, y),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (180, 180, 180),
+            1,
+        )
+        # Bar
+        bar_x = chart_x + 75
+        bar_w = int(bar_max_w * count / max(max_count, 1))
+        color = (0, 180, 0) if count >= 100 else (0, 140, 255)
+        cv.rectangle(image, (bar_x, y - 10), (bar_x + bar_w, y - 2), color, -1)
+        # Count text
+        cv.putText(
+            image,
+            str(count),
+            (bar_x + bar_max_w + 5, y),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (160, 160, 160),
+            1,
+        )
+    return image
+
+
+def draw_collection_overlay(image, mgr, labels):
+    """Draw countdown / recording / done overlay based on CollectionManager state."""
+    info = mgr.get_overlay_state()
+    state = info["state"]
+    h, w = image.shape[:2]
+
+    if state == "countdown":
+        remaining = info.get("countdown_remaining", 0)
+        class_id = info["class_id"]
+        label = labels[class_id] if class_id < len(labels) else str(class_id)
+        # Large centered countdown number
+        count_text = str(int(remaining) + 1)
+        text_size = cv.getTextSize(count_text, cv.FONT_HERSHEY_SIMPLEX, 4.0, 6)[0]
+        tx = (w - text_size[0]) // 2
+        ty = (h + text_size[1]) // 2
+        # Semi-transparent backdrop
+        overlay = image.copy()
+        cv.rectangle(
+            overlay,
+            (tx - 30, ty - text_size[1] - 30),
+            (tx + text_size[0] + 30, ty + 50),
+            (0, 0, 0),
+            -1,
+        )
+        cv.addWeighted(overlay, 0.5, image, 0.5, 0, image)
+        cv.putText(
+            image,
+            count_text,
+            (tx, ty),
+            cv.FONT_HERSHEY_SIMPLEX,
+            4.0,
+            (0, 255, 255),
+            6,
+            cv.LINE_AA,
+        )
+        # Class label below
+        sub = f"Class {class_id}: {label}"
+        sub_size = cv.getTextSize(sub, cv.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+        cv.putText(
+            image,
+            sub,
+            ((w - sub_size[0]) // 2, ty + 40),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (200, 200, 200),
+            2,
+            cv.LINE_AA,
+        )
+
+    elif state == "recording":
+        class_id = info["class_id"]
+        collected = info["collected"]
+        target = info["target"]
+        label = labels[class_id] if class_id < len(labels) else str(class_id)
+        # Green border
+        cv.rectangle(image, (0, 0), (w - 1, h - 1), (0, 220, 0), 4)
+        # Top banner
+        banner_h = 50
+        overlay = image.copy()
+        cv.rectangle(overlay, (0, 0), (w, banner_h), (0, 0, 0), -1)
+        cv.addWeighted(overlay, 0.7, image, 0.3, 0, image)
+        rec_text = f"[REC] {label}  {collected}/{target}"
+        cv.putText(
+            image,
+            rec_text,
+            (15, 35),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 220, 0),
+            2,
+            cv.LINE_AA,
+        )
+        # Progress bar
+        bar_x, bar_y, bar_w, bar_h = 15, 42, w - 30, 6
+        progress = min(collected / max(target, 1), 1.0)
+        cv.rectangle(
+            image, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (80, 80, 80), -1
+        )
+        cv.rectangle(
+            image,
+            (bar_x, bar_y),
+            (bar_x + int(bar_w * progress), bar_y + bar_h),
+            (0, 220, 0),
+            -1,
+        )
+
+    elif state == "done":
+        flushed = info.get("flushed_count", 0)
+        target = info.get("flushed_target", 0)
+        timed_out = info.get("timed_out", False)
+        if timed_out:
+            msg = f"Timeout: {flushed}/{target} frames saved"
+            color = (0, 180, 255)
+        else:
+            msg = f"{flushed} frames saved"
+            color = (0, 220, 0)
+        text_size = cv.getTextSize(msg, cv.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
+        tx = (w - text_size[0]) // 2
+        ty = (h + text_size[1]) // 2
+        cv.putText(
+            image, msg, (tx, ty), cv.FONT_HERSHEY_SIMPLEX, 1.0, color, 2, cv.LINE_AA
+        )
+
+    return image
 
 
 def draw_landmarks(image, landmark_point):
@@ -679,15 +865,7 @@ def draw_point_history(image, point_history):
     return image
 
 
-def draw_info(
-    image,
-    fps,
-    mode,
-    current_class=-1,
-    last_logged_number=-1,
-    session_log_count=0,
-    class_counts=None,
-):
+def draw_info(image, fps, collection_mgr):
     cv.putText(
         image,
         "FPS:" + str(fps),
@@ -709,55 +887,30 @@ def draw_info(
         cv.LINE_AA,
     )
 
-    mode_string = ["Logging Key Point", "Logging Point History"]
-    if 1 <= mode <= 2:
+    if collection_mgr.state == "idle":
+        hint = "Tab=class menu  +/-=batch size"
+        h = image.shape[0]
         cv.putText(
             image,
-            "MODE:" + mode_string[mode - 1],
-            (10, 90),
+            hint,
+            (10, h - 20),
             cv.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
+            0.5,
+            (160, 160, 160),
             1,
             cv.LINE_AA,
         )
-        if 0 <= current_class <= 12:
-            # Recording — green
-            this_class_count = (class_counts or {}).get(current_class, 0)
-            cv.putText(
-                image,
-                f"[REC] CLASS:{current_class}  this:{this_class_count}  total:{session_log_count}",
-                (10, 110),
-                cv.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 220, 0),
-                2,
-                cv.LINE_AA,
-            )
-        else:
-            # Paused — show last class and hint
-            hint = "Press 0-9/a/b/c=record  Space=stop  n=exit"
-            cv.putText(
-                image,
-                hint,
-                (10, 110),
-                cv.FONT_HERSHEY_SIMPLEX,
-                0.48,
-                (200, 200, 200),
-                1,
-                cv.LINE_AA,
-            )
-            if 0 <= last_logged_number <= 12:
-                cv.putText(
-                    image,
-                    f"Last saved: class {last_logged_number}  total:{session_log_count}",
-                    (10, 128),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.48,
-                    (160, 160, 160),
-                    1,
-                    cv.LINE_AA,
-                )
+        batch_text = f"Batch: {collection_mgr.batch_size}"
+        cv.putText(
+            image,
+            batch_text,
+            (10, h - 45),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (160, 160, 160),
+            1,
+            cv.LINE_AA,
+        )
     return image
 
 
