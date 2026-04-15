@@ -1,67 +1,28 @@
-# Gesture → OS action mapping — Milestone 1
+# Gesture → OS action mapping — Milestone 2 (Mouse Control)
 # on_start: action triggered when gesture is ACTIVATED (event_type == 'start')
 # repeat: true  → also fires on 'hold' event (every debounce_seconds while gesture is held)
 # repeat: false → one-shot only ('hold' events ignored)
 #
 # on_start types:
-#   key_press  → single key via pynput / ydotool
-#   key_combo  → multi-key chord (e.g. Alt+Tab)
+#   key_press   → single key via pynput / ydotool
+#   key_combo   → multi-key chord (e.g. Alt+Tab)
 #   mouse_click → left / right / middle
-#   scroll     → up / down with configurable amount
+#   mouse_drag  → press on start, release on end
+#   scroll      → up / down with configurable amount
+#
+# NOTE: pointer_move and scroll_mode are handled as continuous modes
+# in app.py (bypass GestureStateMachine). They are NOT listed here.
 
-open_palm:
-  on_start: key_press
-  key: "XF86AudioPlay"
-  repeat: false
+# null: no action
+# pointer_move: continuous cursor control (bypass)
+# scroll_mode: continuous scroll (bypass)
 
-fist:
-  on_start: key_press
-  key: "XF86AudioMute"
-  repeat: false
-
-thumbs_up:
-  on_start: key_press
-  key: "XF86AudioRaiseVolume"
-  repeat: true
-
-thumbs_down:
-  on_start: key_press
-  key: "XF86AudioLowerVolume"
-  repeat: true
-
-v_sign:
-  on_start: scroll
-  direction: up
-  amount: 5
-  repeat: true
-
-three_fingers:
-  on_start: scroll
-  direction: down
-  amount: 5
-  repeat: true
-
-four_fingers:
-  on_start: key_press
-  key: "XF86MonBrightnessUp"
-  repeat: true
-
-pinch:
-  on_start: mouse_drag
+left_click:
+  on_start: mouse_click
   button: left
   repeat: false
 
-ok_sign:
-  on_start: mouse_click
-  button: right
-  repeat: false
-
-gun_sign:
-  on_start: key_combo
-  keys: ["alt", "tab"]
-  repeat: false
-
-call_sign:
-  on_start: key_press
-  key: "XF86AudioPrev"
+drag_hold:
+  on_start: mouse_drag
+  button: left
   repeat: false

@@ -22,7 +22,7 @@ def make_hand(confidence=0.9, dim=42):
 @pytest.fixture
 def label_file(tmp_path):
     p = tmp_path / "labels.csv"
-    p.write_text("null\nopen_palm\nfist\npointer\nthumbs_up\n")
+    p.write_text("null\npointer_move\nleft_click\ndrag_hold\nscroll_mode\n")
     return str(p)
 
 

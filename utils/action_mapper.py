@@ -177,3 +177,30 @@ class ActionMapper:
             axis = "1" if direction == "up" else "-1"
             for _ in range(amount):
                 subprocess.run(["ydotool", "scroll", "--axis", axis], check=False)
+
+    def mouse_move_to(self, x: int, y: int) -> None:
+        """Move mouse cursor to absolute screen position (x, y)."""
+        if self._backend == "pynput":
+            try:
+                self._ms.position = (x, y)
+            except Exception:
+                pass
+        elif self._backend == "ydotool":
+            subprocess.run(
+                ["ydotool", "mousemove", "--absolute", str(x), str(y)],
+                check=False,
+            )
+
+    def scroll_by(self, clicks: int) -> None:
+        """Scroll by the given number of clicks (positive = up, negative = down)."""
+        if clicks == 0:
+            return
+        if self._backend == "pynput":
+            try:
+                self._ms.scroll(0, clicks)
+            except Exception:
+                pass
+        elif self._backend == "ydotool":
+            direction = "1" if clicks > 0 else "-1"
+            for _ in range(abs(clicks)):
+                subprocess.run(["ydotool", "scroll", "--axis", direction], check=False)

@@ -5,7 +5,7 @@ import numpy as np
 
 from utils.gesture_state_machine import GestureEvent, GestureStateMachine
 
-NUM_CLASSES = 13
+NUM_CLASSES = 5
 
 
 def _scores(class_id, confidence=0.90):
@@ -49,7 +49,7 @@ class TestGestureStateMachineTracking(unittest.TestCase):
                 events.append(e)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, "start")
-        self.assertEqual(events[0].gesture, "open_palm")
+        self.assertEqual(events[0].gesture, "pointer_move")
         self.assertEqual(self.sm.state, "active")
 
     def test_resets_to_idle_when_class_changes_before_activation(self):

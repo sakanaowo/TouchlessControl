@@ -6,18 +6,10 @@ import numpy as np
 
 GESTURE_LABELS = [
     "null",  # 0
-    "open_palm",  # 1
-    "fist",  # 2
-    "pointer",  # 3
-    "thumbs_up",  # 4
-    "thumbs_down",  # 5
-    "v_sign",  # 6
-    "three_fingers",  # 7
-    "four_fingers",  # 8
-    "pinch",  # 9
-    "ok_sign",  # 10
-    "gun_sign",  # 11
-    "call_sign",  # 12
+    "pointer_move",  # 1
+    "left_click",  # 2
+    "drag_hold",  # 3
+    "scroll_mode",  # 4
 ]
 
 

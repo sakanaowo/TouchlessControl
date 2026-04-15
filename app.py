@@ -18,7 +18,10 @@ import mediapipe as mp
 from utils import CvFpsCalc
 from utils.class_menu import ClassMenu
 from utils.collection_manager import CollectionManager, HandData
+from utils.cursor_controller import CursorController, ScrollController
 from utils.feature_extractor import FeatureExtractor
+from utils.gesture_state_machine import GestureStateMachine
+from utils.action_mapper import ActionMapper
 from model import KeyPointClassifierV2
 from model import PointHistoryClassifier
 
@@ -42,6 +45,11 @@ def get_args():
         help="min_tracking_confidence",
         type=int,
         default=0.5,
+    )
+    parser.add_argument(
+        "--no-actions",
+        help="Disable OS input actions (mouse/keyboard)",
+        action="store_true",
     )
 
     args = parser.parse_args()
@@ -119,13 +127,26 @@ def main():
     label_csv_path = "model/keypoint_classifier/keypoint_classifier_v2_label.csv"
     class_menu = ClassMenu(label_csv_path)
     collection_mgr = CollectionManager(
-        csv_path="model/keypoint_classifier/keypoint.csv",
+        csv_path="model/keypoint_classifier/keypoint_v2.csv",
     )
     class_menu.set_class_counts(collection_mgr.class_counts)
 
     # Point history logging (legacy mode, activated by 'h')
     point_history_mode = False
     point_history_class = -1
+
+    # Gesture control pipeline (mouse/keyboard actions)
+    actions_enabled = not args.no_actions
+    cursor_ctrl = CursorController()
+    scroll_ctrl = ScrollController()
+    gesture_sm = GestureStateMachine()
+    action_mapper = None
+    if actions_enabled:
+        try:
+            action_mapper = ActionMapper()
+        except RuntimeError as e:
+            print(f"[WARN] Actions disabled: {e}")
+            actions_enabled = False
 
     while True:
         fps = cvFpsCalc.get()
@@ -216,11 +237,49 @@ def main():
                     )
 
                 # ハンドサイン分類
-                hand_sign_id, _ = keypoint_classifier(pre_processed_landmark_list)
-                if hand_sign_id == 2:  # 指差しサイン
-                    point_history.append(landmark_list[8][0:2])  # 人差指座標
+                hand_sign_id, hand_sign_scores = keypoint_classifier(
+                    pre_processed_landmark_list
+                )
+                # Clamp out-of-range predictions (old model may have more classes than current labels)
+                if hand_sign_id >= len(keypoint_classifier_labels):
+                    hand_sign_id = 0
+                if hand_sign_id == 1:  # pointer_move
+                    point_history.append(landmark_list[8][0:2])  # index fingertip
                 else:
                     point_history.append([0, 0])
+
+                # --- Gesture control: pointer / scroll / click / drag ---
+                if actions_enabled and action_mapper is not None:
+                    frame_h, frame_w = debug_image.shape[:2]
+                    if hand_sign_id == 1:  # pointer_move (bypass state machine)
+                        tip_x, tip_y = landmark_list[8][0], landmark_list[8][1]
+                        sx, sy = cursor_ctrl.update(tip_x, tip_y, frame_w, frame_h)
+                        action_mapper.mouse_move_to(sx, sy)
+                        # Stop scroll if was scrolling
+                        if scroll_ctrl.active:
+                            scroll_ctrl.stop_scroll()
+                    elif hand_sign_id == 4:  # scroll_mode (bypass state machine)
+                        tip_y = landmark_list[8][1]  # index fingertip Y
+                        if not scroll_ctrl.active:
+                            scroll_ctrl.start_scroll(tip_y)
+                        clicks = scroll_ctrl.get_scroll_amount(tip_y)
+                        if clicks != 0:
+                            action_mapper.scroll_by(clicks)
+                        # Reset cursor when scrolling
+                        cursor_ctrl.reset()
+                    else:
+                        # Reset continuous controllers
+                        cursor_ctrl.reset()
+                        if scroll_ctrl.active:
+                            scroll_ctrl.stop_scroll()
+                        # Feed event-based gestures through state machine
+                        if hand_sign_scores is not None:
+                            event = gesture_sm.update(
+                                hand_sign_id,
+                                np.array(hand_sign_scores),
+                            )
+                            if event is not None:
+                                action_mapper.handle(event)
 
                 # フィンガージェスチャー分類
                 finger_gesture_id = 0
@@ -239,15 +298,26 @@ def main():
                 debug_image = draw_landmarks(
                     debug_image, [p[:2] for p in landmark_list]
                 )
+                # Suppress old model label during collection (predictions are meaningless before retraining)
+                if collection_mgr.state in ("countdown", "recording"):
+                    shown_label = "[collecting]"
+                else:
+                    shown_label = keypoint_classifier_labels[hand_sign_id]
                 debug_image = draw_info_text(
                     debug_image,
                     brect,
                     handedness,
-                    keypoint_classifier_labels[hand_sign_id],
+                    shown_label,
                     point_history_classifier_labels[most_common_fg_id[0][0]],
                 )
         else:
             point_history.append([0, 0])
+            # No hand: reset continuous controllers, update state machine
+            cursor_ctrl.reset()
+            if scroll_ctrl.active:
+                scroll_ctrl.stop_scroll()
+            if actions_enabled:
+                gesture_sm.update_no_hand()
 
         # Feed hands to collection manager
         if collection_mgr.state in ("countdown", "recording"):
