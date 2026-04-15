@@ -32,32 +32,13 @@ Phase documentation is located in `docs/ai/`.
 
 ### Timeline Tracking (REQUIRED)
 
-After completing any significant action, the agent **MUST**:
+After completing any significant action (code changes, bug fixes, new features, config changes), the agent **MUST** follow the **`track-progress` skill** (`.github/skills/track-progress/SKILL.md`) to update project timeline.
 
-1. Add a **summary row** to the table in `docs/ai/timeline.md`
-2. Add a **detailed entry** in the daily file `docs/timeline/DD-MM-YYYY.md`
+**Quick summary:**
 
-Timeline entries **MUST include hour precision** (`HH:MM`). Daily detail files use **hour only** since the date is in the filename.
-
-**What counts as "significant":**
-
-- Code changes affecting core logic or architecture
-- Bug fixes that required investigation
-- New features or modules created
-- Configuration or infrastructure changes
-
-**Summary row format** (`docs/ai/timeline.md`):
-
-```
-| YYYY-MM-DD | HH:MM | Tiêu đề | Kết quả ngắn | [chi tiết](../../docs/timeline/DD-MM-YYYY.md) |
-```
-
-**Daily detail format** (`docs/timeline/DD-MM-YYYY.md`):
-
-```
-### HH:MM — [Tiêu đề]
-**Vấn đề:** ... **Nguyên nhân:** ... **Hành động:** ... **Kết quả:** ... **References:** ...
-```
+1. Always append a row to `docs/ai/timeline.md` (date, time HH:MM, title, result, detail link)
+2. Create/append `docs/timeline/DD-MM-YYYY.md` only when the action is complex (≥3 files, debugging, design decisions)
+3. At session start, read `docs/ai/timeline.md` to understand recent project context
 
 ### Checklist Verification & Documentation Updates (REQUIRED)
 
