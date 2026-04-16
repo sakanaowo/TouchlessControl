@@ -1,9 +1,31 @@
+# TouchlessControl — cross-platform requirements
+# Curated top-level dependencies only.
+# Avoid using `pip freeze` output here because it embeds machine-specific paths
+# and OS-specific transitive packages that break installs on other systems.
+
+# Core runtime
+numpy==1.26.4
 mediapipe==0.10.5
-numpy==2.4.4
-opencv_contrib_python==4.10.0.84
-pynput==1.8.1
-pytest==9.0.3
-PyYAML==6.0.3
-screeninfo==0.8.1
-tensorflow==2.14.0
-tflite_runtime==2.14.0
+opencv-contrib-python==4.10.0.84
+protobuf==3.20.3
+PyYAML>=6.0,<7
+pynput>=1.8,<2
+screeninfo>=0.8,<1
+
+# TFLite / training
+# Standard TensorFlow for Linux/Windows and Intel macOS.
+# Apple Silicon uses tensorflow-macos.
+tensorflow==2.14.0 ; platform_system != "Darwin" or platform_machine == "x86_64"
+tensorflow-macos==2.14.0 ; platform_system == "Darwin" and platform_machine == "arm64"
+tflite-runtime==2.14.0 ; platform_system == "Linux" and platform_machine == "x86_64"
+
+# Data analysis / notebooks
+matplotlib>=3.8,<4
+pandas>=2.2,<4
+scikit-learn>=1.4,<2
+seaborn>=0.13,<1
+jupyter>=1.0,<2
+
+# Testing
+pytest>=8,<10
+
