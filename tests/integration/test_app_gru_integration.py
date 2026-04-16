@@ -119,7 +119,8 @@ class TestCollectionManagerSequenceMode:
         return str(p)
 
     def test_sequence_mode_delegates_recording(self, csv_path, npz_path):
-        """In sequence mode, frames go to SequenceCollector, not CSV buffer."""
+        """In sequence mode, frames go to SequenceCollector, not CSV buffer.
+        Recording runs until timeout (no frame-count target)."""
         sc = SequenceCollector(
             window_size=5, stride=2, num_features=3, save_path=npz_path
         )
@@ -145,6 +146,10 @@ class TestCollectionManagerSequenceMode:
         for i in range(10):
             hands = [HandData(features=[float(i)] * 3, confidence=0.9)]
             mgr.on_frame(hands)
+
+        # Trigger timeout to finish
+        mgr.session.started_at = time.time() - 31
+        mgr.on_frame([HandData(features=[0.0] * 3, confidence=0.9)])
 
         assert mgr.state == "done"
         # Verify flush info
@@ -204,6 +209,10 @@ class TestCollectionManagerSequenceMode:
 
         for i in range(5):
             mgr.on_frame([HandData(features=[float(i)] * 2, confidence=0.9)])
+
+        # Trigger timeout to finish
+        mgr.session.started_at = time.time() - 31
+        mgr.on_frame([HandData(features=[0.0] * 2, confidence=0.9)])
 
         assert mgr.state == "done"
         # class_counts should be loaded from NPZ

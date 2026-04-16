@@ -5,9 +5,13 @@ import copy
 import argparse
 import itertools
 import os
+import subprocess
 from collections import Counter
 from collections import deque
 
+# Suppress TensorFlow/TFLite noise (CUDA warnings, oneDNN info, TF-TRT)
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 # Force X11/xcb backend so Qt keyboard events work under Wayland
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
@@ -89,10 +93,16 @@ def main():
     use_brect = True
 
     # カメラ準備 ###############################################################
-    cap = cv.VideoCapture(cap_device)
+    cap = cv.VideoCapture(cap_device, cv.CAP_V4L2)
     cap.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+    # Disable exposure-driven FPS reduction (camera drops to 10fps in low light)
+    dev = f"/dev/video{cap_device}" if isinstance(cap_device, int) else cap_device
+    subprocess.run(
+        ["v4l2-ctl", "-d", dev, "-c", "exposure_dynamic_framerate=0"],
+        capture_output=True,
+    )
     # Verify actual resolution
     actual_w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
@@ -174,6 +184,7 @@ def main():
         collection_mgr = CollectionManager(
             csv_path="model/keypoint_classifier/keypoint_v2.csv",
             sequence_collector=seq_collector,
+            timeout=30.0,  # sequence mode: record for full duration
         )
     else:
         collection_mgr = CollectionManager(
@@ -203,7 +214,7 @@ def main():
         fps = cvFpsCalc.get()
 
         # キー処理(ESC：終了) #################################################
-        key = cv.waitKeyEx(10)
+        key = cv.waitKeyEx(1)
 
         # Collection manager tick (auto-transitions: done → idle)
         collection_mgr.tick()
@@ -232,10 +243,16 @@ def main():
                 collection_mgr.cancel()
         elif key == ord("+") or key == ord("="):
             if class_menu.visible:
-                collection_mgr.adjust_batch_size(10)
+                if use_sequence_collect:
+                    collection_mgr.adjust_timeout(5)
+                else:
+                    collection_mgr.adjust_batch_size(10)
         elif key == ord("-"):
             if class_menu.visible:
-                collection_mgr.adjust_batch_size(-10)
+                if use_sequence_collect:
+                    collection_mgr.adjust_timeout(-5)
+                else:
+                    collection_mgr.adjust_batch_size(-10)
         # Legacy point-history logging
         elif key == 104:  # h
             point_history_mode = not point_history_mode
@@ -247,7 +264,7 @@ def main():
         if not ret:
             break
         image = cv.flip(image, 1)  # ミラー表示
-        debug_image = copy.deepcopy(image)
+        debug_image = image.copy()
 
         # 検出実施 #############################################################
         image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
@@ -638,6 +655,7 @@ def draw_collection_overlay(image, mgr, labels):
         class_id = info["class_id"]
         collected = info["collected"]
         target = info["target"]
+        sequence_mode = info.get("sequence_mode", False)
         label = labels[class_id] if class_id < len(labels) else str(class_id)
         # Green border
         cv.rectangle(image, (0, 0), (w - 1, h - 1), (0, 220, 0), 4)
@@ -646,7 +664,14 @@ def draw_collection_overlay(image, mgr, labels):
         overlay = image.copy()
         cv.rectangle(overlay, (0, 0), (w, banner_h), (0, 0, 0), -1)
         cv.addWeighted(overlay, 0.7, image, 0.3, 0, image)
-        rec_text = f"[REC \u25cf] {label}  {collected}/{target}"
+        if sequence_mode:
+            elapsed = info.get("elapsed", 0)
+            timeout = info.get("timeout", 30)
+            rec_text = f"[REC \u25cf] {label}  {elapsed:.0f}s/{timeout:.0f}s  ({collected} frames)"
+            progress = min(elapsed / max(timeout, 1), 1.0)
+        else:
+            rec_text = f"[REC \u25cf] {label}  {collected}/{target}"
+            progress = min(collected / max(target, 1), 1.0)
         cv.putText(
             image,
             rec_text,
@@ -659,7 +684,6 @@ def draw_collection_overlay(image, mgr, labels):
         )
         # Progress bar
         bar_x, bar_y, bar_w, bar_h = 15, 42, w - 30, 6
-        progress = min(collected / max(target, 1), 1.0)
         cv.rectangle(
             image, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (80, 80, 80), -1
         )
@@ -675,9 +699,14 @@ def draw_collection_overlay(image, mgr, labels):
         flushed = info.get("flushed_count", 0)
         target = info.get("flushed_target", 0)
         timed_out = info.get("timed_out", False)
+        sequence_mode = info.get("sequence_mode", False)
         done_class_id = info.get("class_id", -1)
         done_label = labels[done_class_id] if 0 <= done_class_id < len(labels) else ""
-        if timed_out:
+        if sequence_mode:
+            # In sequence mode, flushed = number of sequences extracted
+            msg = f"\u2713 {flushed} sequences saved for {done_label}"
+            color = (0, 220, 0)
+        elif timed_out:
             msg = f"\u26a0 Timeout: {flushed}/{target} frames saved for {done_label}"
             color = (0, 180, 255)
         else:
@@ -1052,7 +1081,13 @@ def draw_info(image, fps, collection_mgr):
     )
 
     if collection_mgr.state == "idle":
-        hint = "Tab=class menu  +/-=batch size"
+        seq_mode = collection_mgr._seq_collector is not None
+        if seq_mode:
+            hint = "Tab=class menu  +/-=duration"
+            info_text = f"Duration: {int(collection_mgr.timeout)}s"
+        else:
+            hint = "Tab=class menu  +/-=batch size"
+            info_text = f"Batch: {collection_mgr.batch_size}"
         h = image.shape[0]
         cv.putText(
             image,
@@ -1064,10 +1099,9 @@ def draw_info(image, fps, collection_mgr):
             1,
             cv.LINE_AA,
         )
-        batch_text = f"Batch: {collection_mgr.batch_size}"
         cv.putText(
             image,
-            batch_text,
+            info_text,
             (10, h - 45),
             cv.FONT_HERSHEY_SIMPLEX,
             0.5,

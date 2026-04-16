@@ -77,7 +77,7 @@ After completing any implementation task, the agent **MUST** create and run test
 
 ### Known Technical Constraints
 
-- **Webcam**: V4L2, MJPG 1280×720@30fps supported. YUYV 720p = only 10fps. Default: MJPG 720p.
+- **Webcam**: V4L2, MJPG 1280×720@30fps supported. YUYV 720p = only 10fps. Default: MJPG 720p. Must disable `exposure_dynamic_framerate` (v4l2-ctl) or camera drops to 10fps in low light.
 - **OpenCV Qt backend**: Must set `QT_QPA_PLATFORM=xcb` before importing cv2 (Wayland fix).
 - **MediaPipe Hands**: `calc_landmark_list()` returns `[x, y, z]` per point. Drawing functions need `[p[:2] for p in landmark_list]`.
 - **Feature vectors**: 93-dim (21kp×xyz + 15 angles + 5 tip-wrist + 5 tip-palm + 5 states) + 42-dim legacy (XY only).

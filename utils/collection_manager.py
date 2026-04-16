@@ -87,8 +87,9 @@ class CollectionManager:
     def on_frame(self, hands: list[HandData]) -> int:
         """Process one video frame.  Returns 0 or 1 (frame accepted?).
 
-        Multi-hand: if frame passes skip + quality, each qualifying hand
-        adds a row to the buffer, but ``collected`` increments by 1 (frame-based).
+        In CSV mode: frame_skip + quality gate, stop at batch_size frames.
+        In sequence mode: every frame is fed to SequenceCollector (no skip,
+        no frame target — recording runs until timeout or manual cancel).
         """
         if self.state == "countdown":
             if time.time() >= self.session.countdown_end:
@@ -105,27 +106,29 @@ class CollectionManager:
             self._finish(timed_out=True)
             return 0
 
-        # Frame skip
-        self._frame_counter += 1
-        if self._frame_counter % self.frame_skip != 0:
-            return 0
-
         # Quality gate: at least one hand must pass
         good_hands = [h for h in hands if h.confidence >= self.quality_threshold]
         if not good_hands:
             self.session.quality_rejected += 1
             return 0
 
-        # Accept frame — add each qualifying hand as a buffer row
-        for h in good_hands:
-            if self._seq_collector is not None:
+        # Sequence mode: feed every frame, no skip, no frame target
+        if self._seq_collector is not None:
+            for h in good_hands:
                 self._seq_collector.add_frame(h.features)
-            else:
-                self._buffer.append([self.session.class_id, *h.features])
+            self.session.collected += 1
+            return 1
+
+        # CSV mode: frame skip + batch target
+        self._frame_counter += 1
+        if self._frame_counter % self.frame_skip != 0:
+            return 0
+
+        for h in good_hands:
+            self._buffer.append([self.session.class_id, *h.features])
 
         self.session.collected += 1
 
-        # Check if target reached
         if self.session.collected >= self.session.target_count:
             self._finish(timed_out=False)
 
@@ -152,7 +155,7 @@ class CollectionManager:
 
     def get_overlay_state(self) -> dict:
         """Return current state info for overlay rendering."""
-        base = {"state": self.state}
+        base = {"state": self.state, "sequence_mode": self._seq_collector is not None}
         if self.session is not None:
             base["class_id"] = self.session.class_id
             base["collected"] = self.session.collected
@@ -161,6 +164,10 @@ class CollectionManager:
             if self.state == "countdown":
                 remaining = max(0, self.session.countdown_end - time.time())
                 base["countdown_remaining"] = remaining
+            if self.state == "recording":
+                elapsed = time.time() - self.session.started_at
+                base["elapsed"] = elapsed
+                base["timeout"] = self.session.timeout
         if self.state == "done":
             base["flushed_count"] = self._last_flush_count
             base["flushed_target"] = self._last_flush_target
@@ -171,6 +178,10 @@ class CollectionManager:
     def adjust_batch_size(self, delta: int) -> None:
         """Adjust batch size by *delta* (clamped to [5, 200])."""
         self.batch_size = max(5, min(200, self.batch_size + delta))
+
+    def adjust_timeout(self, delta: float) -> None:
+        """Adjust recording timeout by *delta* seconds (clamped to [5, 120])."""
+        self.timeout = max(5, min(120, self.timeout + delta))
 
     # ── Internal ────────────────────────────────────────────────
 
