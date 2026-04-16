@@ -3,3 +3,4 @@ from model.keypoint_classifier.keypoint_classifier_v2 import KeyPointClassifierV
 from model.point_history_classifier.point_history_classifier import (
     PointHistoryClassifier,
 )
+from model.temporal_classifier import TemporalClassifier

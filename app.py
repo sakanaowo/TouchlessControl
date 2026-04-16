@@ -15,14 +15,14 @@ import cv2 as cv
 import numpy as np
 import mediapipe as mp
 
-from utils import CvFpsCalc
+from utils import CvFpsCalc, SequenceBuffer, Debouncer, SequenceCollector
 from utils.class_menu import ClassMenu
 from utils.collection_manager import CollectionManager, HandData
 from utils.cursor_controller import CursorController, ScrollController
 from utils.feature_extractor import FeatureExtractor
 from utils.gesture_state_machine import GestureStateMachine
 from utils.action_mapper import ActionMapper
-from model import KeyPointClassifierV2
+from model import KeyPointClassifierV2, TemporalClassifier
 from model import PointHistoryClassifier
 
 
@@ -51,8 +51,25 @@ def get_args():
         help="Disable OS input actions (mouse/keyboard)",
         action="store_true",
     )
+    parser.add_argument(
+        "--model",
+        help="Classification backend: gru (temporal) or mlp (single-frame)",
+        choices=["gru", "mlp"],
+        default="gru",
+    )
+    parser.add_argument(
+        "--collect-mode",
+        help="Data collection mode: single (CSV frames) or sequence (NPZ windows). "
+        "Default: sequence when --model gru, single when --model mlp",
+        choices=["single", "sequence"],
+        default=None,
+    )
 
     args = parser.parse_args()
+
+    # Smart default: collect-mode follows model choice
+    if args.collect_mode is None:
+        args.collect_mode = "sequence" if args.model == "gru" else "single"
 
     return args
 
@@ -91,18 +108,38 @@ def main():
         min_tracking_confidence=min_tracking_confidence,
     )
 
-    keypoint_classifier = KeyPointClassifierV2()
     feature_extractor = FeatureExtractor()
+
+    use_gru = args.model == "gru"
+    if use_gru:
+        temporal_classifier = TemporalClassifier()
+        seq_buffer = SequenceBuffer(
+            window_size=temporal_classifier.window_size, num_features=93
+        )
+        debouncer = Debouncer()
+        keypoint_classifier = None
+        gesture_sm = None
+    else:
+        keypoint_classifier = KeyPointClassifierV2()
+        temporal_classifier = None
+        seq_buffer = None
+        debouncer = None
 
     point_history_classifier = PointHistoryClassifier()
 
     # ラベル読み込み ###########################################################
-    with open(
-        "model/keypoint_classifier/keypoint_classifier_v2_label.csv",
-        encoding="utf-8-sig",
-    ) as f:
-        keypoint_classifier_labels = csv.reader(f)
-        keypoint_classifier_labels = [row[0] for row in keypoint_classifier_labels]
+    if use_gru:
+        with open(
+            "model/temporal_classifier/temporal_classifier_label.csv",
+            encoding="utf-8-sig",
+        ) as f:
+            keypoint_classifier_labels = [row[0] for row in csv.reader(f)]
+    else:
+        with open(
+            "model/keypoint_classifier/keypoint_classifier_v2_label.csv",
+            encoding="utf-8-sig",
+        ) as f:
+            keypoint_classifier_labels = [row[0] for row in csv.reader(f)]
     with open(
         "model/point_history_classifier/point_history_classifier_label.csv",
         encoding="utf-8-sig",
@@ -124,11 +161,24 @@ def main():
 
     #  ########################################################################
     # Collection UI components
-    label_csv_path = "model/keypoint_classifier/keypoint_classifier_v2_label.csv"
+    use_sequence_collect = args.collect_mode == "sequence"
+    if use_gru:
+        label_csv_path = "model/temporal_classifier/temporal_classifier_label.csv"
+    else:
+        label_csv_path = "model/keypoint_classifier/keypoint_classifier_v2_label.csv"
     class_menu = ClassMenu(label_csv_path)
-    collection_mgr = CollectionManager(
-        csv_path="model/keypoint_classifier/keypoint_v2.csv",
-    )
+
+    seq_collector = None
+    if use_sequence_collect:
+        seq_collector = SequenceCollector()
+        collection_mgr = CollectionManager(
+            csv_path="model/keypoint_classifier/keypoint_v2.csv",
+            sequence_collector=seq_collector,
+        )
+    else:
+        collection_mgr = CollectionManager(
+            csv_path="model/keypoint_classifier/keypoint_v2.csv",
+        )
     class_menu.set_class_counts(collection_mgr.class_counts)
 
     # Point history logging (legacy mode, activated by 'h')
@@ -139,7 +189,8 @@ def main():
     actions_enabled = not args.no_actions
     cursor_ctrl = CursorController()
     scroll_ctrl = ScrollController()
-    gesture_sm = GestureStateMachine()
+    if not use_gru:
+        gesture_sm = GestureStateMachine()
     action_mapper = None
     if actions_enabled:
         try:
@@ -237,9 +288,18 @@ def main():
                     )
 
                 # ハンドサイン分類
-                hand_sign_id, hand_sign_scores = keypoint_classifier(
-                    pre_processed_landmark_list
-                )
+                if use_gru:
+                    seq_buffer.push(pre_processed_landmark_list)
+                    if seq_buffer.is_ready():
+                        hand_sign_id, hand_sign_scores = temporal_classifier(
+                            seq_buffer.get_window()
+                        )
+                    else:
+                        hand_sign_id, hand_sign_scores = 0, None
+                else:
+                    hand_sign_id, hand_sign_scores = keypoint_classifier(
+                        pre_processed_landmark_list
+                    )
                 # Clamp out-of-range predictions (old model may have more classes than current labels)
                 if hand_sign_id >= len(keypoint_classifier_labels):
                     hand_sign_id = 0
@@ -272,12 +332,18 @@ def main():
                         cursor_ctrl.reset()
                         if scroll_ctrl.active:
                             scroll_ctrl.stop_scroll()
-                        # Feed event-based gestures through state machine
+                        # Feed event-based gestures through debouncer (GRU) or state machine (MLP)
                         if hand_sign_scores is not None:
-                            event = gesture_sm.update(
-                                hand_sign_id,
-                                np.array(hand_sign_scores),
-                            )
+                            if use_gru:
+                                event = debouncer.update(
+                                    hand_sign_id,
+                                    np.array(hand_sign_scores),
+                                )
+                            else:
+                                event = gesture_sm.update(
+                                    hand_sign_id,
+                                    np.array(hand_sign_scores),
+                                )
                             if event is not None:
                                 action_mapper.handle(event)
 
@@ -312,12 +378,17 @@ def main():
                 )
         else:
             point_history.append([0, 0])
-            # No hand: reset continuous controllers, update state machine
+            # No hand: reset continuous controllers, update state machine/debouncer
             cursor_ctrl.reset()
             if scroll_ctrl.active:
                 scroll_ctrl.stop_scroll()
             if actions_enabled:
-                gesture_sm.update_no_hand()
+                if use_gru:
+                    event = debouncer.update_no_hand()
+                    if event is not None and action_mapper is not None:
+                        action_mapper.handle(event)
+                else:
+                    gesture_sm.update_no_hand()
 
         # Feed hands to collection manager
         if collection_mgr.state in ("countdown", "recording"):

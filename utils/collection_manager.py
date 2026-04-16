@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import time
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import NamedTuple, Optional
+
+from utils.sequence_collector import SequenceCollector
 
 
 class HandData(NamedTuple):
@@ -43,12 +45,14 @@ class CollectionManager:
         frame_skip: int = 2,
         quality_threshold: float = 0.7,
         timeout: float = 10.0,
+        sequence_collector: Optional[SequenceCollector] = None,
     ):
         self.csv_path = csv_path
         self.batch_size = batch_size
         self.frame_skip = frame_skip
         self.quality_threshold = quality_threshold
         self.timeout = timeout
+        self._seq_collector = sequence_collector
 
         self.state: str = "idle"  # idle | countdown | recording | done
         self.session: CollectionSession | None = None
@@ -77,6 +81,8 @@ class CollectionManager:
             timeout=self.timeout,
         )
         self.state = "countdown"
+        if self._seq_collector is not None:
+            self._seq_collector.start_recording(class_id)
 
     def on_frame(self, hands: list[HandData]) -> int:
         """Process one video frame.  Returns 0 or 1 (frame accepted?).
@@ -112,7 +118,10 @@ class CollectionManager:
 
         # Accept frame — add each qualifying hand as a buffer row
         for h in good_hands:
-            self._buffer.append([self.session.class_id, *h.features])
+            if self._seq_collector is not None:
+                self._seq_collector.add_frame(h.features)
+            else:
+                self._buffer.append([self.session.class_id, *h.features])
 
         self.session.collected += 1
 
@@ -125,6 +134,8 @@ class CollectionManager:
     def cancel(self) -> None:
         """Discard entire buffer, return to idle."""
         self._buffer.clear()
+        if self._seq_collector is not None:
+            self._seq_collector.cancel_recording()
         self.session = None
         self.state = "idle"
 
@@ -164,17 +175,24 @@ class CollectionManager:
     # ── Internal ────────────────────────────────────────────────
 
     def _finish(self, *, timed_out: bool) -> None:
-        """Flush buffer to CSV and transition to done."""
-        self._flush_to_csv()
-        self._last_flush_count = self.session.collected
+        """Flush buffer to CSV (or NPZ via SequenceCollector) and transition to done."""
+        if self._seq_collector is not None:
+            num_sequences = self._seq_collector.stop_recording()
+            self._last_flush_count = num_sequences
+        else:
+            self._flush_to_csv()
+            self._last_flush_count = self.session.collected
+            # Update class counts (CSV mode)
+            self.class_counts[self.session.class_id] = self.class_counts.get(
+                self.session.class_id, 0
+            ) + len(self._buffer)
+            self._buffer.clear()
         self._last_flush_target = self.session.target_count
         self._last_flush_timed_out = timed_out
         self._last_flush_class_id = self.session.class_id
-        # Update class counts
-        self.class_counts[self.session.class_id] = self.class_counts.get(
-            self.session.class_id, 0
-        ) + len(self._buffer)
-        self._buffer.clear()
+        # Reload class counts in sequence mode
+        if self._seq_collector is not None:
+            self.class_counts = self._seq_collector.load_existing()
         self.session = None
         self._done_at = time.time()
         self.state = "done"
@@ -189,8 +207,11 @@ class CollectionManager:
                 writer.writerow(row)
 
     def _load_existing_counts(self) -> None:
-        """Count existing samples per class from CSV."""
+        """Count existing samples per class from CSV or NPZ."""
         self.class_counts.clear()
+        if self._seq_collector is not None:
+            self.class_counts = self._seq_collector.load_existing()
+            return
         try:
             with open(self.csv_path, newline="") as f:
                 reader = csv.reader(f)
