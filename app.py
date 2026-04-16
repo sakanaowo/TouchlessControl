@@ -5,6 +5,7 @@ import copy
 import argparse
 import itertools
 import os
+import platform
 import subprocess
 from collections import Counter
 from collections import deque
@@ -93,21 +94,38 @@ def main():
     use_brect = True
 
     # カメラ準備 ###############################################################
-    cap = cv.VideoCapture(cap_device, cv.CAP_V4L2)
+    # Platform-aware camera backend: V4L2 on Linux, default on others
+    if platform.system() == "Linux":
+        cap = cv.VideoCapture(cap_device, cv.CAP_V4L2)
+    else:
+        cap = cv.VideoCapture(cap_device)
     cap.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
-    # Disable exposure-driven FPS reduction (camera drops to 10fps in low light)
-    dev = f"/dev/video{cap_device}" if isinstance(cap_device, int) else cap_device
-    subprocess.run(
-        ["v4l2-ctl", "-d", dev, "-c", "exposure_dynamic_framerate=0"],
-        capture_output=True,
-    )
-    # Verify actual resolution
+    cap.set(cv.CAP_PROP_FPS, 30)
+    # Fix FPS issues on Linux V4L2 cameras:
+    # - auto_exposure=1 (manual): prevents driver from halving FPS
+    # - exposure_dynamic_framerate=0: some cameras throttle FPS in low light
+    # - Default exposure 250 (~25ms) works for most indoor lighting
+    if platform.system() == "Linux":
+        dev = f"/dev/video{cap_device}" if isinstance(cap_device, int) else cap_device
+        for ctrl in [
+            "auto_exposure=1",
+            "exposure_time_absolute=250",
+            "exposure_dynamic_framerate=0",
+        ]:
+            subprocess.run(
+                ["v4l2-ctl", "-d", dev, "-c", ctrl],
+                capture_output=True,
+            )
+    # Verify actual camera settings
     actual_w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = cap.get(cv.CAP_PROP_FPS)
     if actual_w != cap_width or actual_h != cap_height:
         print(f"[WARN] Requested {cap_width}x{cap_height}, got {actual_w}x{actual_h}")
+    if actual_fps < 30:
+        print(f"[WARN] Requested 30fps, got {actual_fps}fps")
 
     # モデルロード #############################################################
     mp_hands = mp.solutions.hands

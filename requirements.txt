@@ -7,6 +7,7 @@
 numpy==1.26.4
 mediapipe==0.10.5
 opencv-contrib-python==4.10.0.84
+opencv-python==4.10.0.84
 protobuf==3.20.3
 PyYAML>=6.0,<7
 pynput>=1.8,<2
@@ -28,4 +29,8 @@ jupyter>=1.0,<2
 
 # Testing
 pytest>=8,<10
+
+# Face recognition (model/face.py)
+deepface==0.0.99
+faiss-cpu>=1.8,<2
 
